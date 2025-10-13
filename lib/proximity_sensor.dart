@@ -29,12 +29,4 @@ class ProximitySensor {
       });
     }
   }
-  
-  static Future<bool> iosForceCheckSensorValue() async {
-    if (!foundation.kIsWeb && Platform.isIOS) {
-      final bool? value = await _methodChannel.invokeMethod<bool>('iosForceCheckSensorValue');
-      return value ?? false;
-    }
-    return false;
-  }
 }
