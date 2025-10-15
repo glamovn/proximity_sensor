@@ -11,7 +11,6 @@ public class SwiftProximityStreamHandler : NSObject,FlutterStreamHandler
     private var lastNotificationDate: Date?
     private let timerInterval: TimeInterval = 1.0 // 1-second polling interval
     private let notificationTimeout: TimeInterval = 2.0 // 2-second timeout
-    private var enableTimer = true;
     
     private var isCallActive: Bool = false
     private let callObserver = CXCallObserver()
@@ -46,11 +45,9 @@ public class SwiftProximityStreamHandler : NSObject,FlutterStreamHandler
          )
         
         // Start polling every 1 second
-        enableTimer = true
         timer?.invalidate()
         timer = nil
         timer = Timer.scheduledTimer(withTimeInterval: timerInterval, repeats: true) { [weak self] _ in
-            guard let self = self, self.enableTimer else { return }
             self.checkProximityState()
         }
         updateShadowingState()
