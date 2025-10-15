@@ -25,7 +25,7 @@ apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 
 android {
-    compileSdkVersion 36
+    compileSdkVersion 35
     if (project.android.hasProperty('namespace')) {
         namespace 'dev.jeremyko.proximity_sensor'
     }
