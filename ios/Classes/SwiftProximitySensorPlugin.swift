@@ -1,6 +1,5 @@
 import Flutter
 import UIKit
-import CallKit
 
 //==============================================================================
 public class SwiftProximityStreamHandler : NSObject,FlutterStreamHandler
@@ -138,10 +137,4 @@ extension SwiftProximityStreamHandler: CXCallObserverDelegate {
              lastReportedValue = nil
              return nil
          }
-    
-    public func callObserver(_ callObserver: CXCallObserver, callChanged call: CXCall) {
-        let isAppInForeground = UIApplication.shared.applicationState == .active
-        let isCallActive = !call.hasEnded && (call.isOutgoing || call.hasConnected || !call.hasConnected)
-        enableTimer = isCallActive && !isAppInForeground
-    }
 }
