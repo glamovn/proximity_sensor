@@ -13,11 +13,9 @@ public class SwiftProximityStreamHandler : NSObject,FlutterStreamHandler
     private let notificationTimeout: TimeInterval = 2.0 // 2-second timeout
     
     private var isCallActive: Bool = false
-    private let callObserver = CXCallObserver()
     
     public override init() {
         super.init()
-        callObserver.setDelegate(self, queue: nil)
     }
     
     public func onListen(withArguments arguments: Any?,
@@ -48,9 +46,8 @@ public class SwiftProximityStreamHandler : NSObject,FlutterStreamHandler
         timer?.invalidate()
         timer = nil
         timer = Timer.scheduledTimer(withTimeInterval: timerInterval, repeats: true) { [weak self] _ in
-            self.checkProximityState()
+            self?.checkProximityState()
         }
-        updateShadowingState()
         return nil
     }
 }
@@ -78,7 +75,7 @@ public class SwiftProximitySensorPlugin: NSObject, FlutterPlugin
 
 
 // MARK: - Call State Observation
-extension SwiftProximityStreamHandler: CXCallObserverDelegate {
+extension SwiftProximityStreamHandler {
     
      @objc private func proximityStateDidChange(notification: Notification) {
              guard let device = notification.object as? UIDevice else { return }
