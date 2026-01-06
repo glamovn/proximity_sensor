@@ -11,15 +11,16 @@ import Flutter
       // Notification-based detection
       private var notificationObserver: NSObjectProtocol?
 
+      // App lifecycle observers
+      private var didEnterBackgroundObserver: NSObjectProtocol?
+      private var willEnterForegroundObserver: NSObjectProtocol?
+
       // Polling backup mechanism
       private var pollTimer: Timer?
-      private var lastNotificationTime: Date?
-      private let notificationTimeoutInterval: TimeInterval = 2.0  // 2s without notification = polling kicks in
-      private let normalPollingInterval: TimeInterval = 1.0        // Slow polling when notifications work
-      private let activePollingInterval: TimeInterval = 0.2        // Fast polling when notifications fail
+      private var isActive: Bool = false
 
       // Configuration
-      private let brightnessThreshold: Double = 0.1
+      private let pollingInterval: TimeInterval = 0.5  // Simple consistent polling
 
       #if DEBUG
       private let debugLogging = true
@@ -43,23 +44,13 @@ import Flutter
 
           eventSink = events
           lastReportedValue = nil
+          isActive = true
 
-          // Enable proximity monitoring
-          UIDevice.current.isProximityMonitoringEnabled = true
-          guard UIDevice.current.isProximityMonitoringEnabled else {
-              log("sensor unavailable")
-              return nil
-          }
-          log("sensor available. Starting hybrid monitoring...")
+          // Set up app lifecycle observers
+          setupLifecycleObservers()
 
-          // PRIMARY: Set up notification-based detection
-          setupNotificationListener()
-
-          // BACKUP: Start intelligent polling
-          startIntelligentPolling()
-
-          // Initial state report
-          reportCurrentState(source: "initial")
+          // Start monitoring
+          startProximityMonitoring()
 
           return nil
       }
@@ -72,10 +63,22 @@ import Flutter
 
       // MARK: - Cleanup
       private func cleanup() {
-          // Remove notification observer
+          isActive = false
+
+          // Remove notification observers
           if let observer = notificationObserver {
               NotificationCenter.default.removeObserver(observer)
               notificationObserver = nil
+          }
+
+          if let observer = didEnterBackgroundObserver {
+              NotificationCenter.default.removeObserver(observer)
+              didEnterBackgroundObserver = nil
+          }
+
+          if let observer = willEnterForegroundObserver {
+              NotificationCenter.default.removeObserver(observer)
+              willEnterForegroundObserver = nil
           }
 
           // Stop timer
@@ -85,131 +88,125 @@ import Flutter
           // Clear state
           eventSink = nil
           lastReportedValue = nil
-          lastNotificationTime = nil
 
           // Disable proximity monitoring
           UIDevice.current.isProximityMonitoringEnabled = false
+          log("cleanup complete")
       }
 
-      // MARK: - PRIMARY: Notification-Based Detection
+      // MARK: - App Lifecycle
+      private func setupLifecycleObservers() {
+          didEnterBackgroundObserver = NotificationCenter.default.addObserver(
+              forName: UIApplication.didEnterBackgroundNotification,
+              object: nil,
+              queue: .main
+          ) { [weak self] _ in
+              self?.handleDidEnterBackground()
+          }
+
+          willEnterForegroundObserver = NotificationCenter.default.addObserver(
+              forName: UIApplication.willEnterForegroundNotification,
+              object: nil,
+              queue: .main
+          ) { [weak self] _ in
+              self?.handleWillEnterForeground()
+          }
+          log("lifecycle observers registered")
+      }
+
+      private func handleDidEnterBackground() {
+          log("app entered background → pausing proximity monitoring")
+          stopProximityMonitoring()
+      }
+
+      private func handleWillEnterForeground() {
+          log("app entering foreground → resuming proximity monitoring")
+          if isActive {
+              startProximityMonitoring()
+          }
+      }
+
+      // MARK: - Proximity Monitoring
+      private func startProximityMonitoring() {
+          // Enable proximity monitoring
+          UIDevice.current.isProximityMonitoringEnabled = true
+
+          guard UIDevice.current.isProximityMonitoringEnabled else {
+              log("⚠️ proximity sensor unavailable on this device")
+              return
+          }
+          log("✅ proximity monitoring enabled")
+
+          // Set up notification listener
+          setupNotificationListener()
+
+          // Start polling as backup
+          startPolling()
+
+          // Report initial state
+          reportCurrentState()
+      }
+
+      private func stopProximityMonitoring() {
+          // Stop polling
+          pollTimer?.invalidate()
+          pollTimer = nil
+
+          // Remove notification observer
+          if let observer = notificationObserver {
+              NotificationCenter.default.removeObserver(observer)
+              notificationObserver = nil
+          }
+
+          // Disable proximity monitoring
+          UIDevice.current.isProximityMonitoringEnabled = false
+          log("proximity monitoring disabled")
+      }
+
       private func setupNotificationListener() {
           notificationObserver = NotificationCenter.default.addObserver(
               forName: UIDevice.proximityStateDidChangeNotification,
               object: UIDevice.current,
               queue: .main
-          ) { [weak self] notification in
-              self?.handleProximityNotification(notification)
+          ) { [weak self] _ in
+              self?.handleProximityChange()
           }
           log("notification listener registered")
       }
 
-      private func handleProximityNotification(_ notification: Notification) {
-          guard let device = notification.object as? UIDevice else { return }
-
-          // Update last notification time
-          lastNotificationTime = Date()
-
-          let isNear = device.proximityState
-          let brightness = UIScreen.main.brightness
-
-          // Apply brightness correction
-          let corrected = correctProximityValue(isNear: isNear, brightness: brightness)
-
-          log("📡 notification: \(isNear ? "NEAR" : "FAR") | brightness: \(String(format: "%.2f", brightness)) | 
-  corrected: \(corrected == 1 ? "NEAR" : "FAR")")
-
-          emitIfChanged(corrected, source: "notification")
-
-          // Notifications are working - slow down polling
-          adjustPollingInterval(to: normalPollingInterval)
+      private func handleProximityChange() {
+          let value = UIDevice.current.proximityState ? Int8(1) : Int8(0)
+          log("📡 proximity notification: \(value == 1 ? "NEAR" : "FAR")")
+          emitIfChanged(value)
       }
 
-      // MARK: - BACKUP: Intelligent Polling
-      private func startIntelligentPolling() {
-          // Start with normal polling interval
+      private func startPolling() {
           pollTimer = Timer.scheduledTimer(
-              withTimeInterval: normalPollingInterval,
+              withTimeInterval: pollingInterval,
               repeats: true
           ) { [weak self] _ in
               self?.pollProximity()
           }
-          log("intelligent polling started (interval: \(normalPollingInterval)s)")
+          log("polling started (interval: \(pollingInterval)s)")
       }
 
       private func pollProximity() {
-          let now = Date()
-
-          // Check if notifications are still working
-          let notificationStale = lastNotificationTime.map { now.timeIntervalSince($0) > notificationTimeoutInterval }
-  ?? true
-
-          if notificationStale && pollTimer?.timeInterval != activePollingInterval {
-              log("⚠️ notifications stale - switching to active polling")
-              adjustPollingInterval(to: activePollingInterval)
-          }
-
-          // Read current state
-          let isNear = UIDevice.current.proximityState
-          let brightness = UIScreen.main.brightness
-
-          // Apply brightness correction
-          let corrected = correctProximityValue(isNear: isNear, brightness: brightness)
-
-          // Only log if this is active polling (not backup)
-          if notificationStale {
-              log("🔄 poll: \(isNear ? "NEAR" : "FAR") | brightness: \(String(format: "%.2f", brightness)) | corrected:
-   \(corrected == 1 ? "NEAR" : "FAR")")
-          }
-
-          emitIfChanged(corrected, source: notificationStale ? "polling" : "backup-poll")
+          let value = UIDevice.current.proximityState ? Int8(1) : Int8(0)
+          emitIfChanged(value)
       }
 
-      private func adjustPollingInterval(to newInterval: TimeInterval) {
-          guard pollTimer?.timeInterval != newInterval else { return }
-
-          log("adjusting polling interval: \(newInterval)s")
-
-          pollTimer?.invalidate()
-          pollTimer = Timer.scheduledTimer(
-              withTimeInterval: newInterval,
-              repeats: true
-          ) { [weak self] _ in
-              self?.pollProximity()
-          }
+      private func reportCurrentState() {
+          let value = UIDevice.current.proximityState ? Int8(1) : Int8(0)
+          log("initial state: \(value == 1 ? "NEAR" : "FAR")")
+          emitIfChanged(value)
       }
 
-      // MARK: - Correction Logic
-      private func correctProximityValue(isNear: Bool, brightness: Double) -> Int8 {
-          // If screen is bright but proximity says NEAR → likely false positive (sensor covered but screen on)
-          if brightness > brightnessThreshold && isNear {
-              return 0  // Force FAR
-          }
-
-          // If screen is dark but proximity says FAR → likely false negative (face near but sensor glitch)
-          if brightness <= brightnessThreshold && !isNear {
-              return 1  // Force NEAR
-          }
-
-          // Trust the sensor
-          return isNear ? 1 : 0
-      }
-
-      // MARK: - State Reporting
-      private func reportCurrentState(source: String) {
-          let isNear = UIDevice.current.proximityState
-          let brightness = UIScreen.main.brightness
-          let corrected = correctProximityValue(isNear: isNear, brightness: brightness)
-
-          log("[\(source)] current state: \(corrected == 1 ? "NEAR" : "FAR")")
-          emitIfChanged(corrected, source: source)
-      }
-
-      private func emitIfChanged(_ value: Int8, source: String) {
+      private func emitIfChanged(_ value: Int8) {
           guard value != lastReportedValue else { return }
 
           lastReportedValue = value
           eventSink?(value)
-          log("✅ emitted: \(value == 1 ? "NEAR" : "FAR") (from \(source))")
+          log("✅ emitted: \(value == 1 ? "NEAR (1)" : "FAR (0)")")
       }
   }
 

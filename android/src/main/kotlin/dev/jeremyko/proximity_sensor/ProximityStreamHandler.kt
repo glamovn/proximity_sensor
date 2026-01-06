@@ -22,6 +22,7 @@ class ProximityStreamHandler(
     private var powerManager: PowerManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var enableScreenOff: Boolean = false
+    private var isListening: Boolean = false
 
     companion object {
         private const val TAG = "ProximityStreamHandler"
@@ -32,30 +33,26 @@ class ProximityStreamHandler(
         Log.d(TAG, "onListen called")
         eventSink = events
 
-        sensorManager =
-            applicationContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        proximitySensor = sensorManager?.getDefaultSensor(Sensor.TYPE_PROXIMITY)
+        if (sensorManager == null) {
+            sensorManager =
+                applicationContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        }
+
+        if (proximitySensor == null) {
+            proximitySensor = sensorManager?.getDefaultSensor(Sensor.TYPE_PROXIMITY)
+        }
 
         if (proximitySensor == null) {
             Log.w(TAG, "No proximity sensor available on this device")
             return
         }
 
-        sensorManager?.registerListener(this, proximitySensor, SensorManager.SENSOR_DELAY_NORMAL)
-        powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
-
-        if (enableScreenOff && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            if (wakeLock == null) {
-                wakeLock = powerManager?.newWakeLock(
-                    PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
-                    "dev.jeremyko.proximity_sensor:lock"
-                )
-            }
-            if (wakeLock?.isHeld == false) {
-                wakeLock?.acquire()
-                Log.d(TAG, "WakeLock acquired")
-            }
+        if (powerManager == null) {
+            powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
         }
+
+        registerSensorListener()
+        updateWakeLockState()
     }
 
     override fun onCancel(arguments: Any?) {
@@ -78,29 +75,71 @@ class ProximityStreamHandler(
 
     fun onResume() {
         Log.d(TAG, "onResume called")
+        if (eventSink != null && !isListening) {
+            registerSensorListener()
+            updateWakeLockState()
+        }
     }
 
     fun release() {
         Log.d(TAG, "release called → unregistering sensor + releasing wakelock")
-        sensorManager?.unregisterListener(this, proximitySensor)
-        sensorManager = null
-        proximitySensor = null
-
-        if (wakeLock?.isHeld == true) {
-            wakeLock?.release()
-            Log.d(TAG, "WakeLock released")
-        }
-        wakeLock = null
-
+        unregisterSensorListener()
+        releaseWakeLock()
         eventSink = null
     }
 
     fun setScreenOffEnabled(enabled: Boolean) {
         Log.d(TAG, "setScreenOffEnabled($enabled)")
         enableScreenOff = enabled
-        if (!enabled && wakeLock?.isHeld == true) {
+        updateWakeLockState()
+    }
+
+    @SuppressLint("WakelockTimeout")
+    private fun updateWakeLockState() {
+        if (enableScreenOff && isListening && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            if (wakeLock == null) {
+                wakeLock = powerManager?.newWakeLock(
+                    PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
+                    "dev.jeremyko.proximity_sensor:lock"
+                )
+            }
+            if (wakeLock?.isHeld == false) {
+                wakeLock?.acquire()
+                Log.d(TAG, "WakeLock acquired")
+            }
+        } else {
+            releaseWakeLock()
+        }
+    }
+
+    private fun releaseWakeLock() {
+        if (wakeLock?.isHeld == true) {
             wakeLock?.release()
-            Log.d(TAG, "WakeLock released due to disable")
+            Log.d(TAG, "WakeLock released")
+        }
+    }
+
+    private fun registerSensorListener() {
+        if (!isListening && proximitySensor != null) {
+            val registered = sensorManager?.registerListener(
+                this,
+                proximitySensor,
+                SensorManager.SENSOR_DELAY_NORMAL
+            )
+            if (registered == true) {
+                isListening = true
+                Log.d(TAG, "Proximity sensor listener registered")
+            } else {
+                Log.e(TAG, "Failed to register proximity sensor listener")
+            }
+        }
+    }
+
+    private fun unregisterSensorListener() {
+        if (isListening) {
+            sensorManager?.unregisterListener(this, proximitySensor)
+            isListening = false
+            Log.d(TAG, "Proximity sensor listener unregistered")
         }
     }
 }
